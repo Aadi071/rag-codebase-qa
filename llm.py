@@ -63,3 +63,40 @@ def complete(system, user):
     if config.LLM_BACKEND == "openai":
         return _openai_chat(system, user)
     return _ollama_chat(system, user)
+
+
+def _ollama_stream(system, user):
+    url = config.OLLAMA_HOST.rstrip("/") + "/api/chat"
+    body = json.dumps({
+        "model": config.OLLAMA_MODEL, "stream": True,
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": user}],
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        resp = urllib.request.urlopen(req, timeout=600)
+    except urllib.error.URLError as e:
+        raise RuntimeError(
+            f"Could not reach Ollama at {config.OLLAMA_HOST} ({e}). "
+            f"Is it running and is the model pulled (ollama pull {config.OLLAMA_MODEL})?"
+        )
+    for line in resp:                      # Ollama streams JSONL, one obj per line
+        line = line.strip()
+        if not line:
+            continue
+        obj = json.loads(line)
+        piece = obj.get("message", {}).get("content", "")
+        if piece:
+            yield piece
+        if obj.get("done"):
+            break
+
+
+def complete_stream(system, user):
+    """Yield answer tokens as they are generated (Ollama). Other backends yield
+    the whole answer once (no token streaming), so callers work either way."""
+    if config.LLM_BACKEND == "ollama":
+        yield from _ollama_stream(system, user)
+    else:
+        yield complete(system, user)

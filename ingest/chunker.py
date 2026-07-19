@@ -11,9 +11,9 @@ The strategy (a small "divide and combine"):
     size budget, then start a new chunk.
   - A function is kept whole even when oversized (splitting its signature from
     its body destroys the semantic unit).
-  - A class too big to keep whole is split into its members, and each member
-    chunk is PREFIXED with the class signature (e.g. "class Foo(Bar):") and
-    named "Foo.method" so the member never loses its parent context.
+  - A "container" too big to keep whole (a class / Java interface / Rust impl)
+    is split into its members, and each member chunk is PREFIXED with the
+    container signature and named "Container.member" so it keeps its context.
 
 Every chunk carries metadata (file path, line range, symbol name) which becomes
 the auth.py:42 style citation later.
@@ -24,6 +24,9 @@ from dataclasses import dataclass
 import tree_sitter_python
 import tree_sitter_javascript
 import tree_sitter_typescript
+import tree_sitter_go
+import tree_sitter_java
+import tree_sitter_rust
 from tree_sitter import Language, Parser
 
 # Build each Language + Parser once at import time and reuse for every file.
@@ -32,6 +35,9 @@ _LANGUAGES = {
     "javascript": Language(tree_sitter_javascript.language()),
     "typescript": Language(tree_sitter_typescript.language_typescript()),
     "tsx": Language(tree_sitter_typescript.language_tsx()),
+    "go": Language(tree_sitter_go.language()),
+    "java": Language(tree_sitter_java.language()),
+    "rust": Language(tree_sitter_rust.language()),
 }
 _PARSERS = {name: Parser(lang) for name, lang in _LANGUAGES.items()}
 
@@ -39,23 +45,24 @@ _PARSERS = {name: Parser(lang) for name, lang in _LANGUAGES.items()}
 # intact; anything larger is broken along its own inner boundaries.
 DEFAULT_MAX_CHARS = 1500
 
-# Class-like nodes: when oversized, these are split into members (with the
-# class signature prepended). Everything else that is oversized is either a
-# function (kept whole) or a generic container we descend into.
-_CLASS_TYPES = ("class_definition", "class_declaration")
-
-# Fallback: other containers we may descend into if we ever meet them oversized.
-DESCENDABLE_TYPES = {
-    "python": {"block"},
-    "javascript": {"class_body"},
-    "typescript": {"class_body"},
-    "tsx": {"class_body"},
+# Per-language "container" node types: when oversized, these are split into
+# members (with the container signature prepended). Everything else oversized is
+# a function (kept whole) or a plain node. Go has no method-holding container
+# (methods are top-level funcs), so it keeps everything whole.
+CLASS_TYPES = {
+    "python": {"class_definition"},
+    "javascript": {"class_declaration"},
+    "typescript": {"class_declaration"},
+    "tsx": {"class_declaration"},
+    "java": {"class_declaration", "interface_declaration", "enum_declaration"},
+    "go": set(),
+    "rust": {"impl_item"},
 }
 
 
 def _is_class(node, language):
-    """True if node is a class def (possibly @decorator-wrapped or `export`-ed)."""
-    if node.type in _CLASS_TYPES:
+    """True if node is a splittable container (possibly wrapped by decorators/export)."""
+    if node.type in CLASS_TYPES.get(language, set()):
         return True
     if node.type in ("decorated_definition", "export_statement"):
         return any(_is_class(c, language) for c in node.children)
@@ -63,8 +70,8 @@ def _is_class(node, language):
 
 
 def _is_descendable(node, language):
-    """True if an oversized non-class node should be split into its children."""
-    return node.type in DESCENDABLE_TYPES.get(language, set())
+    """Unused fallback hook; containers are handled by _split_class."""
+    return False
 
 
 @dataclass
@@ -77,20 +84,25 @@ class Chunk:
     symbol: str | None
 
 
+_DEF_TYPES = ("function_definition", "class_definition",
+              "function_declaration", "class_declaration")
+
+
 def _definition_node(node):
     """Unwrap a decorated_definition / export_statement to the def it wraps."""
     if node.type in ("decorated_definition", "export_statement"):
         for c in node.children:
-            if c.type in ("function_definition", "class_definition",
-                          "function_declaration", "class_declaration"):
+            if c.type in _DEF_TYPES:
                 return c
     return node
 
 
 def _node_name(node, source):
-    """Return the name a function/class node defines, if the grammar exposes it."""
+    """Return the name a function/class/impl node defines, if available."""
     node = _definition_node(node)
     name_node = node.child_by_field_name("name")
+    if name_node is None and node.type == "impl_item":
+        name_node = node.child_by_field_name("type")   # Rust: `impl Foo`
     if name_node is not None:
         return source[name_node.start_byte:name_node.end_byte].decode("utf-8", "replace")
     return None
@@ -112,20 +124,20 @@ def _make_chunk(nodes, source, rel_path, language):
 
 
 def _split_class(node, source, rel_path, language, max_chars):
-    """Split an oversized class into member chunks.
+    """Split an oversized container into member chunks.
 
-    Each member chunk is prefixed with the class signature and gets a
-    "ClassName.member" symbol, so a retrieved method always says which class it
-    belongs to. The line range still points at the member's real lines.
+    Each member chunk is prefixed with the container signature and gets a
+    "Container.member" symbol, so a retrieved method always says where it lives.
+    The line range still points at the member's real lines.
     """
-    inner = _definition_node(node)                 # unwrap any decorators
+    inner = _definition_node(node)
     body = inner.child_by_field_name("body")
     class_name = _node_name(node, source) or "class"
 
     if body is None:                               # unusual grammar shape: keep whole
         return [_make_chunk([node], source, rel_path, language)]
 
-    # Header = decorators + `class X(...):` up to (but not including) the body.
+    # Header = decorators/export + `class X ... {` up to (not incl.) the body.
     header = source[node.start_byte:body.start_byte].decode("utf-8", "replace").rstrip()
 
     members = _chunk_children(body.children, source, rel_path, language, max_chars)
@@ -154,11 +166,6 @@ def _chunk_children(children, source, rel_path, language, max_chars):
         if size > max_chars and _is_class(child, language):
             flush()
             chunks.extend(_split_class(child, source, rel_path, language, max_chars))
-        elif size > max_chars and _is_descendable(child, language):
-            flush()
-            chunks.extend(
-                _chunk_children(child.children, source, rel_path, language, max_chars)
-            )
         elif size > max_chars:
             flush()
             chunks.append(_make_chunk([child], source, rel_path, language))

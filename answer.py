@@ -14,6 +14,7 @@ import argparse
 
 from store import db
 from retrieve import hybrid_search
+from embed import embeddings
 import llm
 
 SYSTEM_PROMPT = (
@@ -28,8 +29,19 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_user_prompt(question, chunks):
-    parts = [f"Question: {question}", "", "Code context:"]
+def build_user_prompt(question, chunks, exemplars=None):
+    parts = []
+    if exemplars:
+        ex = exemplars[0]
+        parts += [
+            "A previous answer that a user rated highly for a SIMILAR question is "
+            "shown below. Use it only as a quality/style guide -- still ground your "
+            "answer in the Code context and only cite files that appear there.",
+            f"Similar question: {ex['question']}",
+            f"Well-rated answer: {ex['answer']}",
+            "",
+        ]
+    parts += [f"Question: {question}", "", "Code context:"]
     for c in chunks:
         sym = f"  ({c['symbol']})" if c.get("symbol") else ""
         parts.append(f"\n--- {c['rel_path']}:{c['start_line']}-{c['end_line']}{sym}")
@@ -38,13 +50,17 @@ def build_user_prompt(question, chunks):
     return "\n".join(parts)
 
 
-def answer(question, repo=None, k=6):
+def answer(question, repo=None, k=6, query_embedding=None, use_exemplars=True):
     conn = db.connect()
-    chunks = hybrid_search(conn, question, repo=repo, k=k)
+    qv = query_embedding if query_embedding is not None else embeddings.embed_query(question)
+    chunks = hybrid_search(conn, question, repo=repo, k=k, query_embedding=qv)
+    # Feedback loop: pull the most similar highly-rated past answer as a few-shot
+    # exemplar so the model learns from answers users liked (no training needed).
+    exemplars = db.find_similar_good_answers(conn, repo, qv, k=1) if use_exemplars else []
     conn.close()
     if not chunks:
         return "No indexed chunks found. Did you run build_index.py for this repo?", []
-    user_prompt = build_user_prompt(question, chunks)
+    user_prompt = build_user_prompt(question, chunks, exemplars)
     reply = llm.complete(SYSTEM_PROMPT, user_prompt)
     return reply, chunks
 

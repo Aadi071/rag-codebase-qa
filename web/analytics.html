@@ -1,0 +1,79 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Analytics — CodeSage</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{color-scheme:light}*{box-sizing:border-box}
+  body{margin:0;background:#f7f6f3;color:#1a1a1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+  a{color:#d9622b;text-decoration:none}
+  .nav{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;background:#fff;border-bottom:1px solid #e6e3dc}
+  .logo{font-weight:800;font-size:17px}.logo span{color:#d9622b}
+  .nav-links{display:flex;gap:16px;font-size:13.5px}
+  .wrap{max-width:960px;margin:24px auto;padding:0 20px}
+  h1{font-size:20px;margin:0 0 4px}.sub{color:#888;font-size:13px;margin:0 0 20px}
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:18px}
+  .stat{background:#fff;border:1px solid #e6e3dc;border-radius:12px;padding:16px}
+  .stat .num{font-size:26px;font-weight:700}.stat .lbl{font-size:11.5px;color:#6b6b6b;text-transform:uppercase;letter-spacing:.03em}
+  .charts{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px}
+  .card{background:#fff;border:1px solid #e6e3dc;border-radius:12px;padding:16px}
+  .card h3{margin:0 0 10px;font-size:14px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid #f0eee8}
+  th{color:#888;font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.03em}
+  .q{max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rate{color:#e0a030}
+  @media(max-width:720px){.stats{grid-template-columns:1fr 1fr}.charts{grid-template-columns:1fr}}
+</style></head><body>
+  <div class="nav">
+    <a class="logo" href="/">Code<span>Sage</span></a>
+    <div class="nav-links"><a href="/app">&larr; Back to app</a><a href="#" onclick="signout();return false">Sign out</a></div>
+  </div>
+  <div class="wrap">
+    <h1>Your analytics</h1>
+    <p class="sub">Usage and answer-satisfaction. Ratings + comments are stored as preference data to help improve answers.</p>
+    <div class="stats">
+      <div class="stat"><div class="num" id="s-total">-</div><div class="lbl">Questions asked</div></div>
+      <div class="stat"><div class="num" id="s-avg">-</div><div class="lbl">Avg satisfaction</div></div>
+      <div class="stat"><div class="num" id="s-rated">-</div><div class="lbl">Answers rated</div></div>
+      <div class="stat"><div class="num" id="s-repos">-</div><div class="lbl">Repos explored</div></div>
+      <div class="stat"><div class="num" id="s-cache">-</div><div class="lbl">Cache hit rate</div></div>
+    </div>
+    <div class="charts">
+      <div class="card"><h3>Satisfaction distribution</h3><canvas id="distChart" height="180"></canvas></div>
+      <div class="card"><h3>Questions over time</h3><canvas id="timeChart" height="180"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Recent questions</h3>
+      <table><thead><tr><th>Question</th><th>Repo</th><th>Rating</th></tr></thead><tbody id="recent"></tbody></table>
+    </div>
+  </div>
+<script>
+const token=localStorage.getItem('cs_token');
+if(!token){ location.href='/login'; }
+function signout(){ localStorage.removeItem('cs_token'); localStorage.removeItem('cs_email'); location.href='/login'; }
+const repoName=u=>{try{return u.replace(/^https?:\/\/github.com\//,'');}catch(e){return u;}};
+
+(async function(){
+  const d=await (await fetch('/api/analytics',{headers:{'Authorization':'Bearer '+token}})).json();
+  document.getElementById('s-total').textContent=d.total_questions;
+  document.getElementById('s-avg').textContent=d.avg_rating!=null?(d.avg_rating+' ★'):'—';
+  document.getElementById('s-rated').textContent=d.rated_count;
+  document.getElementById('s-repos').textContent=d.distinct_repos;
+  document.getElementById('s-cache').textContent=(d.cache_hit_rate!=null?d.cache_hit_rate:0)+'%';
+
+  new Chart(document.getElementById('distChart'),{type:'bar',
+    data:{labels:['1★','2★','3★','4★','5★'],datasets:[{data:[1,2,3,4,5].map(i=>d.rating_distribution[i]||0),
+      backgroundColor:['#e57373','#f0a878','#f0c178','#a9cf8e','#7fbf8e']}]},
+    options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
+
+  new Chart(document.getElementById('timeChart'),{type:'line',
+    data:{labels:d.questions_over_time.map(p=>p.day),datasets:[{data:d.questions_over_time.map(p=>p.count),
+      borderColor:'#d9622b',backgroundColor:'rgba(217,98,43,.12)',fill:true,tension:.3}]},
+    options:{plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{precision:0}}}}});
+
+  document.getElementById('recent').innerHTML = d.recent.length
+    ? d.recent.map(r=>'<tr><td class="q">'+r.question+'</td><td>'+repoName(r.repo)+
+        '</td><td class="rate">'+(r.rating?('★'.repeat(r.rating)):'<span style="color:#bbb">—</span>')+'</td></tr>').join('')
+    : '<tr><td colspan="3" style="color:#999">No questions yet. Ask some in the app.</td></tr>';
+})();
+</script></body></html>

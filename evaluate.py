@@ -40,6 +40,11 @@ def _first_hit_rank(ranked_paths, expected):
 
 
 def main():
+    import argparse as _argparse
+    _ap = _argparse.ArgumentParser()
+    _ap.add_argument("--rerank", action="store_true", help="also score a hybrid+cross-encoder-rerank row")
+    _args = _ap.parse_args()
+
     spec = json.load(open(os.path.join("eval", "eval_set.json"), encoding="utf-8"))
     repo = spec["repo"]
     questions = spec["questions"]
@@ -52,7 +57,8 @@ def main():
     by_id = {c["id"]: c for c in all_chunks}
 
     # accumulators: mode -> {k -> hits}, plus reciprocal ranks for hybrid
-    hits = {m: {k: 0 for k in KS} for m in ("vector", "bm25", "hybrid")}
+    modes = ["vector", "bm25", "hybrid"] + (["hybrid+rr"] if _args.rerank else [])
+    hits = {m: {k: 0 for k in KS} for m in modes}
     rr_hybrid = 0.0
 
     for item in questions:
@@ -68,6 +74,10 @@ def main():
             "bm25": [by_id[i]["rel_path"] for i in bm_ids],
             "hybrid": [by_id[i]["rel_path"] for i in hyb_ids],
         }
+        if _args.rerank:
+            cand = [dict(by_id[i]) for i in hyb_ids[:20]]
+            reranked = retrieve.rerank(q, cand)
+            ranked["hybrid+rr"] = [r["rel_path"] for r in reranked]
         for mode, paths in ranked.items():
             rank = _first_hit_rank(paths, expected)
             for k in KS:
@@ -83,7 +93,7 @@ def main():
     header = "mode      " + "".join(f"  Recall@{k}" for k in KS)
     print(header)
     print("-" * len(header))
-    for mode in ("vector", "bm25", "hybrid"):
+    for mode in modes:
         row = f"{mode:<9}" + "".join(f"   {hits[mode][k]/n*100:5.1f}%" for k in KS)
         print(row)
     print(f"\nHybrid MRR: {rr_hybrid/n:.3f}")

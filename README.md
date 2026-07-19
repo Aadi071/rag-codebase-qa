@@ -10,6 +10,8 @@ local LLM (Ollama), with an optional switch to hosted APIs (OpenAI / Anthropic).
 
 ---
 
+**Supported languages:** Python, JavaScript, TypeScript/TSX, Go, Java, Rust (adding another is: install its tree-sitter wheel + 2 lines).
+
 ## What it does
 
 1. **Ingests** a repo: shallow-clones it, filters out non-code files.
@@ -51,7 +53,7 @@ background thread) and **query-time** (fast, every question).
 
 | Layer | Choice |
 |-------|--------|
-| Chunking | Python + tree-sitter (per-language wheels) |
+| Chunking | tree-sitter AST (Python, JavaScript, TypeScript/TSX, Go, Java, Rust) |
 | Embeddings | bge-base via sentence-transformers (local) / OpenAI text-embedding-3-small |
 | Vector store | pgvector (Postgres extension) + HNSW cosine index |
 | Retrieval | Vector + BM25 (`rank-bm25`), fused with RRF |
@@ -102,15 +104,52 @@ the evidence that hybrid retrieval was worth building.
 > `selftest.py` additionally verifies the full stack end-to-end (chunking,
 > pgvector + real embeddings, hybrid retrieval, grounded Ollama answer).
 
+## Learning from feedback
+
+Every answer is rated (1-5 stars) and logged. That signal is used two ways:
+
+**1. In-context learning (live, no training).** When a new question comes in, the
+most similar *highly-rated* past answer is retrieved (by question embedding) and
+injected into the prompt as a few-shot exemplar. The assistant imitates answers
+users liked, immediately -- a real feedback loop that reuses the embedding +
+pgvector infra.
+
+**2. Fine-tuning dataset export.** `export_training_data.py` dumps the feedback
+log as `sft.jsonl` (highly-rated question->answer pairs in chat format, ready for
+SFT via a provider API or local LoRA with unsloth/axolotl) and `preferences.jsonl`
+(all rated interactions). True DPO pairs need two answers to the same prompt, so
+those are collected by re-asking + re-rating.
+
+Design note: in a RAG system most quality comes from *retrieval*, so low-rated
+answers are also mined to grow the eval set and tune retrieval -- often a bigger
+win than touching model weights.
+
+## Efficiency: answer caching
+
+Re-running retrieval + the LLM for a question that was already answered wastes
+time and (for hosted models) money. So answers are cached per repo:
+
+- **Exact + semantic cache.** On each question we check `answer_cache` for the
+  same repo: an exact question match, or a stored question whose embedding is
+  >= 0.93 cosine-similar. A hit returns the stored answer instantly and **skips
+  retrieval and the LLM entirely**.
+- **Invalidation.** Re-indexing a repo (its code changed) drops that repo's
+  cached answers, so cached results never go stale.
+- The analytics dashboard shows the **cache hit rate**, and the app labels
+  cached answers as "served from cache."
+
 ## What I'd change at 10x scale
 
-- **Incremental indexing** via per-file content hashes: re-embed only changed
-  files instead of the whole repo.
-- **Batched/streamed embedding** and a real job queue (not an in-process thread)
-  so many repos index concurrently with durable status.
-- **A cross-encoder re-ranker** on top of RRF for higher precision@k.
-- **Per-repo namespaces + auth** so multiple users/repos are isolated.
-- **Streaming answers** (token-by-token) to the UI.
+Already implemented beyond the core spec: incremental indexing (per-file
+hashing), token streaming, a cross-encoder re-ranker, auth + accounts, an answer
+cache, and a feedback-driven few-shot loop.
+
+Still ahead at real scale:
+- A durable job queue (not an in-process thread) so many repos index concurrently.
+- Per-tenant isolation + rate limiting.
+- Better JS symbol extraction (CommonJS / assigned function expressions).
+- True DPO preference pairs (two answers per prompt) for fine-tuning.
+- A live cloud deployment (needs hosted models -- bge + Ollama don't fit free tiers).
 
 ## Run it locally
 
@@ -145,6 +184,10 @@ python evaluate.py
 
 # Health check (all of the above at once)
 python selftest.py --repo https://github.com/pallets/click
+
+# Run the test suite (no torch/Ollama needed — stubs the model)
+pip install -r requirements-dev.txt
+pytest
 ```
 
 ## Configuration (.env)
@@ -155,6 +198,7 @@ python selftest.py --repo https://github.com/pallets/click
 | `LLM_BACKEND` | `ollama` | `ollama`, `anthropic`, or `openai` |
 | `OLLAMA_MODEL` | `llama3.1` | e.g. `llama3.2` for faster CPU inference |
 | `DATABASE_URL` | `postgresql://rag:rag@localhost:5432/rag` | matches docker-compose |
+| `RERANK` | `false` | set `true` to add a cross-encoder re-ranker (sharper, slower) |
 
 > Switching `EMBEDDING_BACKEND` changes the vector dimension, so reset the DB
 > volume (`docker compose down -v && docker compose up -d`) and re-index.

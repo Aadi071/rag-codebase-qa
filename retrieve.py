@@ -11,6 +11,7 @@ import re
 
 from rank_bm25 import BM25Okapi
 
+import config
 from embed import embeddings
 from store import db
 
@@ -58,9 +59,43 @@ def rrf_fuse(rankings, k=60):
     return ordered, scores
 
 
-def hybrid_search(conn, query, repo=None, k=5, candidates=40):
-    """Vector search + BM25, fused with RRF. Returns top-k chunk dicts."""
-    qv = embeddings.embed_query(query)
+_cross_encoder = None
+
+
+def _score_pairs(pairs):
+    """Cross-encoder relevance scores for (query, chunk_text) pairs.
+
+    Lazy-loads the model on first use. Tests monkeypatch this function.
+    """
+    global _cross_encoder
+    from sentence_transformers import CrossEncoder
+    if _cross_encoder is None:
+        _cross_encoder = CrossEncoder(config.RERANK_MODEL)
+    return _cross_encoder.predict(pairs)
+
+
+def rerank(query, results):
+    """Reorder candidate chunk dicts by a cross-encoder relevance score.
+
+    A cross-encoder reads the query and chunk TOGETHER (unlike bi-encoder
+    embeddings), giving sharper relevance -- at the cost of running the model on
+    each candidate, which is why we only rerank the top fused candidates.
+    """
+    if not results:
+        return results
+    scores = _score_pairs([(query, r["content"]) for r in results])
+    for r, sc in zip(results, scores):
+        r["rerank_score"] = float(sc)
+    return sorted(results, key=lambda r: r["rerank_score"], reverse=True)
+
+
+def hybrid_search(conn, query, repo=None, k=5, candidates=40, query_embedding=None):
+    """Vector search + BM25, fused with RRF. Returns top-k chunk dicts.
+
+    Pass `query_embedding` to reuse an already-computed query vector (avoids a
+    second embedding call when the caller also needs the vector).
+    """
+    qv = query_embedding if query_embedding is not None else embeddings.embed_query(query)
     vec_rows = db.vector_search(conn, qv, repo=repo, k=candidates)
     all_chunks = db.fetch_chunks(conn, repo=repo)
 
@@ -73,11 +108,15 @@ def hybrid_search(conn, query, repo=None, k=5, candidates=40):
     vec_rank = {doc_id: i + 1 for i, doc_id in enumerate(vec_ids)}
     bm_rank = {doc_id: i + 1 for i, doc_id in enumerate(bm_ids)}
 
+    # If reranking, keep more candidates for the cross-encoder to reorder.
+    n_cand = max(k, config.RERANK_CANDIDATES) if config.RERANK else k
     results = []
-    for doc_id in fused_ids[:k]:
+    for doc_id in fused_ids[:n_cand]:
         row = dict(by_id[doc_id])
         row["rrf"] = fused_scores[doc_id]
         row["vec_rank"] = vec_rank.get(doc_id)     # None if not in that list
         row["bm25_rank"] = bm_rank.get(doc_id)
         results.append(row)
-    return results
+    if config.RERANK:
+        results = rerank(query, results)
+    return results[:k]

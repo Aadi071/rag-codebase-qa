@@ -394,3 +394,122 @@ ok (weaker symbol labels for CommonJS). Other languages need a grammar added.
 ANTY TO TRY on own machine: index another repo via the web app or
 `python build_index.py <url>` then ask, e.g. a TS repo (sindresorhus/ky) or
 another Python repo (pallets/flask). Deploy (M5c) intentionally deferred.
+
+## Session 2026-07-15 (cont.) — Multi-language support added (Go, Java, Rust)
+
+Extended beyond Python/JS/TS. Refactored chunker.py: CLASS_TYPES is now
+per-language (python class_definition; js/ts class_declaration; java
+class_declaration/interface_declaration/enum_declaration; rust impl_item; go
+none). _node_name falls back to the "type" field for Rust `impl` blocks.
+repo.py EXT_TO_LANG += .go/.java/.rs. requirements += tree-sitter-go/java/rust.
+
+VERIFIED on real repos (sandbox):
+- click Python 667 chunks (regression clean: 0 broken/0 orphan).
+- ky TS 399 (24 named). gin Go 513 (90 named) [was 0]. gson Java 1623 (1306
+  named, 256 Class.method). byteorder Rust 30 (functions named).
+Now 6 languages: Python, JavaScript, TypeScript/TSX, Go, Java, Rust.
+
+ANTY TO DO: `pip install -r requirements.txt` (gets the 3 new grammar wheels)
+before indexing Go/Java/Rust repos.
+
+## Session 2026-07-15 (cont.) — Milestone 6 DONE (product UI: landing/auth/analytics/feedback)
+
+New:
+- `security.py` — bcrypt password hashing + stateless HMAC-signed session tokens
+  (no JWT dep). SECRET_KEY from env (added a real random one to .env; documented
+  in .env.example).
+- `store/db.py` — users + interactions tables (init_app_schema) + create_user,
+  get_user_by_email, log_interaction, set_feedback, analytics_summary.
+- `app.py` — rewritten: lifespan creates schema; auth dependency (Bearer token);
+  /api/register, /api/login; /api/ask now requires auth and LOGS each interaction
+  (returns interaction_id); /api/feedback (1-5 satisfaction + comment);
+  /api/analytics (totals, avg rating, distribution, over-time, recent); page
+  routes GET / (landing) /login /app /analytics.
+- `web/landing.html` (marketing), `web/login.html` (sign in/register tabs),
+  `web/app.html` (chat + 5-star feedback widget + comment), `web/analytics.html`
+  (Chart.js: satisfaction distribution + questions-over-time + recent table).
+  Old web/index.html orphaned (mount read-only, can't delete; unrouted/harmless).
+- requirements += bcrypt.
+
+Feedback data (question, answer, sources, rating, comment) is stored as
+preference/training data - the "help train the LLM" ask (collection + analytics
+done; actual fine-tuning out of scope).
+
+VERIFIED 17/17 via TestClient + pgserver + stubs: pages serve, auth gates (401),
+register/login (+dup/bad-pw handling), index->ready, authed ask logs interaction,
+feedback saved, analytics aggregates (total/avg/distribution/recent) correct.
+
+ANTY TO RUN: `pip install -r requirements.txt` (bcrypt), then
+`uvicorn app:app --port 8000`, open http://localhost:8000 -> landing -> register
+-> app -> ask -> rate -> /analytics. (Docker pg + Ollama running.)
+
+## Session 2026-07-15 (cont.) — Learning-from-feedback loop + training export
+
+Anty asked "how do we make the llm learn from the analytics." Explained the 4
+tiers (retrieval tuning / in-context exemplars / semantic cache / SFT-DPO) and
+built the recommended two:
+
+1. FEW-SHOT FEEDBACK LOOP (in-context, no training):
+   - interactions now stores question_embedding vector(dim) (ALTER IF NOT EXISTS
+     upgrades old tables). db.find_similar_good_answers() = vector search over
+     rating>=4 interactions.
+   - retrieve.hybrid_search accepts query_embedding (avoid double-embed).
+   - answer.answer(query_embedding=, use_exemplars=True) pulls the most similar
+     highly-rated past answer and injects it into the grounded prompt as a
+     quality/style exemplar. app.py /api/ask embeds once, passes qv through,
+     stores it with the interaction.
+2. TRAINING EXPORT: export_training_data.py -> sft.jsonl (rating>=N chat pairs
+   for SFT / LoRA) + preferences.jsonl (all rated). DPO caveat documented.
+
+VERIFIED 5/5 (TestClient + pgserver + stubs): rate Q1 5-star -> similar Q2 prompt
+contains the exemplar (Q1 answer) -> export writes both JSONL files.
+README: added "Learning from feedback" section.
+
+Answer signature changed (new optional params w/ defaults) -> selftest/evaluate
+unaffected.
+
+## Session 2026-07-15 (cont.) — Answer caching (curb repeat pipeline cost)
+
+Anty asked how to avoid re-running the pipeline for repeated questions. Built a
+semantic answer cache:
+- store/db.py: `answer_cache` table (repo, question, question_embedding, answer,
+  sources). cache_lookup() = exact question match OR nearest cached question with
+  cosine >= 0.93 -> returns stored answer, skipping retrieval + LLM. cache_store()
+  on miss. cache_invalidate(repo) called in _index_job after re-index (stale-safe).
+  interactions gained a `cached` BOOL; analytics_summary now returns cache_hits +
+  cache_hit_rate.
+- app.py /api/ask: cache-first (lookup -> hit returns instantly; miss runs answer
+  + stores). Response includes {cached}.
+- web/app.html: "served from cache" indicator. web/analytics.html: cache-hit-rate
+  stat card.
+VERIFIED 6/6 (TestClient + pgserver + stubs): 1st ask calls LLM; identical + near-
+duplicate asks are cache hits (LLM NOT called); re-index invalidates -> next ask
+misses; analytics exposes cache_hit_rate.
+README: added "Efficiency: answer caching" section.
+
+Note: cache is per-repo/global (same repo+question -> same answer for all users);
+few-shot personalization is bypassed on a cache hit (documented trade-off).
+
+## Session 2026-07-15 (cont.) — Polish batch: streaming, citations, incremental, rerank, tests+CI
+
+All four requested polish items built + verified in sandbox:
+1. STREAMING + CLICKABLE CITATIONS (5/5): llm.complete_stream (Ollama JSONL
+   stream). app.py /api/ask_stream = SSE (meta->token*->done), cache-aware. Front
+   end app.html streams tokens; sources link to GitHub blob at line range
+   (ghLink -> /blob/HEAD/path#Lstart-Lend, backslashes normalized).
+2. INCREMENTAL INDEXING (5/5): chunks.file_hash column; indexer.index_repo() only
+   re-embeds changed/new files, drops deleted, reuses unchanged; cache invalidated
+   only when something changed. build_index.py + app._index_job use it. Verified:
+   re-index unchanged embeds 0.
+3. CROSS-ENCODER RERANK (4/4): config.RERANK (+ MODEL, CANDIDATES). retrieve.rerank
+   via sentence-transformers CrossEncoder (lazy; tests stub _score_pairs).
+   hybrid_search reranks top candidates when RERANK on. evaluate.py --rerank row.
+4. PYTEST SUITE + CI (10 passed): tests/ (conftest with pgserver + stub embed/llm,
+   sample_repo fixture; test_chunker, test_retrieval_and_index, test_api).
+   pytest.ini (pythonpath). requirements-dev.txt (no torch/ollama). GitHub Actions
+   .github/workflows/ci.yml runs pytest on push/PR.
+
+Test fixes: enlarged sample_repo (BM25 IDF is degenerate on a 2-doc corpus);
+go/java chunker test asserts parse+identifier (tiny files merge so symbol=None).
+
+README updated (RERANK config, pytest instructions, reworked 10x section).

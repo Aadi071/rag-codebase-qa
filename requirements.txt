@@ -3,6 +3,9 @@ tree-sitter>=0.23
 tree-sitter-python>=0.23
 tree-sitter-javascript>=0.23
 tree-sitter-typescript>=0.23
+tree-sitter-go>=0.23
+tree-sitter-java>=0.23
+tree-sitter-rust>=0.23
 
 # Milestone 2 - embeddings + pgvector
 psycopg[binary]>=3.2       # Postgres driver
@@ -15,3 +18,4 @@ openai>=1.40               # only used if EMBEDDING_BACKEND=openai
 rank-bm25>=0.2   # BM25 keyword search for hybrid retrieval
 fastapi>=0.115   # backend API
 uvicorn>=0.30    # ASGI server (run: uvicorn app:app)
+bcrypt>=4.0      # password hashing (auth)

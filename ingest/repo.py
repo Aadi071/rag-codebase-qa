@@ -33,6 +33,9 @@ EXT_TO_LANG = {
     ".mjs": "javascript", ".cjs": "javascript",
     ".ts": "typescript",
     ".tsx": "tsx",
+    ".go": "go",
+    ".java": "java",
+    ".rs": "rust",
 }
 
 # Anything bigger than this is almost certainly generated or minified, not code

@@ -1,0 +1,57 @@
+<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — CodeSage</title>
+<style>
+  :root{color-scheme:light}*{box-sizing:border-box}
+  body{margin:0;background:#f7f6f3;color:#1a1a1a;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+       display:flex;align-items:center;justify-content:center;min-height:100vh}
+  a{color:#d9622b;text-decoration:none}
+  .box{background:#fff;border:1px solid #e6e3dc;border-radius:16px;padding:28px;width:360px}
+  .logo{font-weight:800;font-size:20px;text-align:center;margin-bottom:4px}.logo span{color:#d9622b}
+  .tag{text-align:center;color:#888;font-size:13px;margin-bottom:20px}
+  .tabs{display:flex;background:#f1efe8;border-radius:9px;padding:4px;margin-bottom:18px}
+  .tabs button{flex:1;padding:8px;border:none;background:none;border-radius:7px;font-size:14px;cursor:pointer;color:#666}
+  .tabs button.on{background:#fff;color:#1a1a1a;font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+  label{font-size:12px;color:#6b6b6b;display:block;margin:12px 0 5px}
+  input{width:100%;padding:10px 12px;border:1px solid #ddd8cd;border-radius:9px;font-size:14px}
+  .btn{width:100%;margin-top:18px;padding:11px;border:none;border-radius:9px;background:#d9622b;color:#fff;font-weight:600;font-size:15px;cursor:pointer}
+  .msg{margin-top:12px;font-size:13px;min-height:18px;text-align:center}
+  .err{color:#b3311c}.ok{color:#1f7a3d}
+  .back{display:block;text-align:center;margin-top:16px;font-size:13px}
+</style></head><body>
+  <div class="box">
+    <div class="logo">Code<span>Sage</span></div>
+    <div class="tag">Sign in to ask, rate, and track your codebase questions.</div>
+    <div class="tabs">
+      <button id="tab-in" class="on" onclick="mode('login')">Sign in</button>
+      <button id="tab-up" onclick="mode('register')">Register</button>
+    </div>
+    <label>Email</label><input id="email" type="email" placeholder="you@example.com" autocomplete="username">
+    <label>Password</label><input id="password" type="password" placeholder="at least 6 characters" autocomplete="current-password"
+      onkeydown="if(event.key==='Enter') submit()">
+    <button class="btn" id="submitBtn" onclick="submit()">Sign in</button>
+    <div class="msg" id="msg"></div>
+    <a class="back" href="/">&larr; Back to home</a>
+  </div>
+<script>
+let M='login';
+function mode(m){M=m;
+  document.getElementById('tab-in').classList.toggle('on',m==='login');
+  document.getElementById('tab-up').classList.toggle('on',m==='register');
+  document.getElementById('submitBtn').textContent = m==='login'?'Sign in':'Create account';
+  document.getElementById('msg').textContent='';
+}
+async function submit(){
+  const email=document.getElementById('email').value.trim();
+  const password=document.getElementById('password').value;
+  const msg=document.getElementById('msg'); msg.className='msg'; msg.textContent='...';
+  try{
+    const r=await fetch('/api/'+(M==='login'?'login':'register'),{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});
+    const d=await r.json();
+    if(!r.ok){ msg.className='msg err'; msg.textContent=d.detail||'Failed'; return; }
+    localStorage.setItem('cs_token',d.token); localStorage.setItem('cs_email',d.email);
+    location.href='/app';
+  }catch(e){ msg.className='msg err'; msg.textContent='Network error'; }
+}
+</script></body></html>
