@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codebase Q&A</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:28px; background:#f7f6f3; color:#1a1a1a;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; }
+  .wrap { max-width: 820px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  .sub { color:#6b6b6b; font-size:13px; margin:0 0 22px; }
+  .card { background:#fff; border:1px solid #e6e3dc; border-radius:12px; padding:16px 18px; margin-bottom:16px; }
+  label { font-size:12px; color:#6b6b6b; text-transform:uppercase; letter-spacing:.03em; }
+  .row { display:flex; gap:8px; margin-top:8px; }
+  input[type=text] { flex:1; padding:9px 11px; border:1px solid #ddd8cd; border-radius:8px; font-size:14px; }
+  button { padding:9px 16px; border:none; border-radius:8px; background:#d9622b; color:#fff;
+    font-size:14px; font-weight:600; cursor:pointer; }
+  button:disabled { background:#e6c4b0; cursor:not-allowed; }
+  .status { margin-top:10px; font-size:13px; color:#7a5a2d; min-height:18px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .answer { white-space:pre-wrap; line-height:1.55; font-size:14.5px; }
+  .sources { margin-top:14px; border-top:1px solid #eee; padding-top:10px; }
+  .src { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:#444; padding:2px 0; }
+  .muted { color:#9a9a9a; }
+  .spin { animation: sp 1s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Codebase Q&amp;A</h1>
+  <p class="sub">Index a public GitHub repo, then ask questions and get answers grounded in the real code with file:line citations.</p>
+
+  <div class="card">
+    <label>GitHub repository</label>
+    <div class="row">
+      <input id="repo" type="text" placeholder="https://github.com/pallets/click"
+             value="https://github.com/pallets/click">
+      <button id="indexBtn" onclick="startIndex()">Index</button>
+    </div>
+    <div class="status" id="indexStatus"></div>
+  </div>
+
+  <div class="card">
+    <label>Ask a question</label>
+    <div class="row">
+      <input id="q" type="text" placeholder="how are aliases resolved for a command?"
+             onkeydown="if(event.key==='Enter') ask()">
+      <button id="askBtn" onclick="ask()">Ask</button>
+    </div>
+    <div class="status" id="askStatus"></div>
+    <div class="answer" id="answer"></div>
+    <div class="sources" id="sources"></div>
+  </div>
+</div>
+
+<script>
+let pollTimer = null;
+
+function setIndexStatus(html) { document.getElementById('indexStatus').innerHTML = html; }
+function dot(color) { return '<span class="dot" style="background:'+color+'"></span>'; }
+
+async function startIndex() {
+  const repo = document.getElementById('repo').value.trim();
+  if (!repo) return;
+  setIndexStatus(dot('#e0a030') + 'Starting…');
+  await fetch('/api/index', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({repo_url: repo})});
+  poll(repo);
+}
+
+function poll(repo) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const r = await fetch('/api/status?repo=' + encodeURIComponent(repo));
+    const s = await r.json();
+    const labels = {cloning:'Cloning repo…', chunking:'Chunking code…',
+      embedding:'Embedding chunks…', storing:'Storing vectors…'};
+    if (s.stage === 'ready') {
+      clearInterval(pollTimer);
+      setIndexStatus(dot('#1f7a3d') + 'Ready — ' + (s.chunks||'') + ' chunks indexed.');
+    } else if (s.stage === 'error') {
+      clearInterval(pollTimer);
+      setIndexStatus(dot('#b3311c') + 'Error: ' + (s.error||'unknown'));
+    } else if (s.stage === 'unindexed') {
+      clearInterval(pollTimer);
+      setIndexStatus(dot('#9a9a9a') + 'Not indexed yet — click Index.');
+    } else {
+      const extra = s.chunks ? ' ('+s.chunks+' chunks)' : '';
+      setIndexStatus(dot('#e0a030') + (labels[s.stage]||s.stage) + extra);
+    }
+  }, 1500);
+}
+
+async function ask() {
+  const repo = document.getElementById('repo').value.trim();
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  document.getElementById('answer').textContent = '';
+  document.getElementById('sources').innerHTML = '';
+  document.getElementById('askStatus').innerHTML = dot('#e0a030') + 'Thinking (local LLM, may take a bit on CPU)…';
+  document.getElementById('askBtn').disabled = true;
+  try {
+    const r = await fetch('/api/ask', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({repo_url: repo, question: q})});
+    const data = await r.json();
+    document.getElementById('askStatus').innerHTML = '';
+    document.getElementById('answer').textContent = data.answer || '(no answer)';
+    if (data.sources && data.sources.length) {
+      let html = '<div class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.03em;">Sources</div>';
+      for (const s of data.sources) {
+        html += '<div class="src">' + s.path + ':' + s.start + '-' + s.end +
+                (s.symbol ? '  ('+s.symbol+')' : '') + '</div>';
+      }
+      document.getElementById('sources').innerHTML = html;
+    }
+  } catch (e) {
+    document.getElementById('askStatus').innerHTML = dot('#b3311c') + 'Request failed: ' + e;
+  } finally {
+    document.getElementById('askBtn').disabled = false;
+  }
+}
+
+// On load, check if the default repo is already indexed.
+window.addEventListener('load', () => {
+  const repo = document.getElementById('repo').value.trim();
+  if (repo) poll(repo);
+});
+</script>
+</body>
+</html>

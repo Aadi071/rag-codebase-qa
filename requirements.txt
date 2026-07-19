@@ -1,0 +1,17 @@
+# Milestone 1 - repo ingestion + AST chunking
+tree-sitter>=0.23
+tree-sitter-python>=0.23
+tree-sitter-javascript>=0.23
+tree-sitter-typescript>=0.23
+
+# Milestone 2 - embeddings + pgvector
+psycopg[binary]>=3.2       # Postgres driver
+pgvector>=0.3              # vector type adapter for psycopg
+python-dotenv>=1.0         # load .env
+sentence-transformers>=3.0 # local embeddings (bge-base); pulls in PyTorch
+openai>=1.40               # only used if EMBEDDING_BACKEND=openai
+
+# Coming later:
+rank-bm25>=0.2   # BM25 keyword search for hybrid retrieval
+fastapi>=0.115   # backend API
+uvicorn>=0.30    # ASGI server (run: uvicorn app:app)

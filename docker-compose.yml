@@ -1,0 +1,17 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: rag-pgvector
+    environment:
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+      POSTGRES_DB: rag
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # SQL in db/init runs ONCE, only on a fresh (empty) volume.
+      - ./db/init:/docker-entrypoint-initdb.d
+
+volumes:
+  pgdata:
