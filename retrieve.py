@@ -15,25 +15,35 @@ import config
 from embed import embeddings
 from store import db
 
-# Split on non-alphanumerics (handles snake_case), then split camelCase runs.
+# _IDENT keeps the WHOLE identifier (underscores included); _WORD then splits
+# snake_case parts; _CAMEL splits camelCase runs.
+_IDENT = re.compile(r"[A-Za-z0-9_]+")
 _WORD = re.compile(r"[A-Za-z0-9]+")
 _CAMEL = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|[0-9]+")
 
 
 def tokenize(text):
-    """Lowercased tokens; identifiers split on snake_case AND camelCase.
+    """Lowercased tokens: the full identifier PLUS its snake/camel parts.
 
-    "getUserById" -> ["getuserbyid", "get", "user", "by", "id"]
-    "read_config" -> ["read", "config"]  (underscore already splits _WORD)
-    Keeping the whole identifier too lets exact-name queries score highest.
+    "resolve_command" -> ["resolve_command", "resolve", "command"]
+    "getUserById"     -> ["getuserbyid", "get", "user", "by", "id"]
+
+    Emitting the FULL identifier is what gives BM25 its exact-name matching
+    power. An earlier version split on underscores first, so snake_case names
+    never existed as tokens and BM25 lost its main advantage on Python code.
     """
     tokens = []
-    for word in _WORD.findall(text):
-        tokens.append(word.lower())
-        for part in _CAMEL.findall(word):
-            low = part.lower()
-            if low != word.lower():
-                tokens.append(low)
+    for ident in _IDENT.findall(text):
+        full = ident.lower()
+        tokens.append(full)
+        for word in _WORD.findall(ident):          # snake_case parts
+            w = word.lower()
+            if w != full:
+                tokens.append(w)
+            for part in _CAMEL.findall(word):      # camelCase parts
+                p = part.lower()
+                if p != w:
+                    tokens.append(p)
     return tokens
 
 
@@ -46,15 +56,22 @@ def bm25_rank(query, chunks):
     return [chunks[i]["id"] for i in order]
 
 
-def rrf_fuse(rankings, k=60):
-    """Reciprocal Rank Fusion. score(d) = sum 1/(k + rank(d)) across rankings.
+def rrf_fuse(rankings, k=60, weights=None):
+    """Reciprocal Rank Fusion. score(d) = sum w_i / (k + rank_i(d)) across lists.
 
-    rank is 1-based. Higher fused score = better. Returns (ordered_ids, scores).
+    rank is 1-based. `weights` (parallel to rankings) lets one retriever count
+    more than another -- important when the two retrievers are not equally
+    strong, since equal weighting lets a weak list drag a strong one down.
+    Returns (ordered_ids, scores).
     """
+    if weights is None:
+        weights = [1.0] * len(rankings)
     scores = {}
-    for ranking in rankings:
+    for ranking, w in zip(rankings, weights):
+        if w == 0:
+            continue
         for rank, doc_id in enumerate(ranking, start=1):
-            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank)
+            scores[doc_id] = scores.get(doc_id, 0.0) + w / (k + rank)
     ordered = sorted(scores, key=scores.get, reverse=True)
     return ordered, scores
 
@@ -100,9 +117,15 @@ def hybrid_search(conn, query, repo=None, k=5, candidates=40, query_embedding=No
     all_chunks = db.fetch_chunks(conn, repo=repo)
 
     vec_ids = [r["id"] for r in vec_rows]
-    bm_ids = bm25_rank(query, all_chunks)[:candidates]
+    # Building a BM25 index over every chunk costs real time per query, so skip
+    # it entirely when its fusion weight is 0 (the measured default).
+    bm_ids = (bm25_rank(query, all_chunks)[:candidates]
+              if config.RRF_WEIGHT_BM25 > 0 else [])
 
-    fused_ids, fused_scores = rrf_fuse([vec_ids, bm_ids])
+    fused_ids, fused_scores = rrf_fuse(
+        [vec_ids, bm_ids],
+        weights=[config.RRF_WEIGHT_VECTOR, config.RRF_WEIGHT_BM25],
+    )
 
     by_id = {r["id"]: r for r in all_chunks}
     vec_rank = {doc_id: i + 1 for i, doc_id in enumerate(vec_ids)}

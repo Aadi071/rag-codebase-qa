@@ -1,0 +1,19 @@
+# Production deps. Deliberately EXCLUDES sentence-transformers/torch (~1GB+):
+# the deployed build uses hosted embeddings (EMBEDDING_BACKEND=openai), so the
+# local model stack is never imported. Keeps the image small enough for free tiers.
+tree-sitter>=0.23
+tree-sitter-python>=0.23
+tree-sitter-javascript>=0.23
+tree-sitter-typescript>=0.23
+tree-sitter-go>=0.23
+tree-sitter-java>=0.23
+tree-sitter-rust>=0.23
+
+psycopg[binary]>=3.2
+pgvector>=0.3
+python-dotenv>=1.0
+rank-bm25>=0.2
+fastapi>=0.115
+uvicorn>=0.30
+bcrypt>=4.0
+openai>=1.40          # hosted embeddings + LLM in production

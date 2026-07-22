@@ -19,3 +19,15 @@ def test_go_and_java_are_parsed():
     assert go and any("Add" in c.text for c in go)
     java = chunk_source(b"class Foo { int bar() { return 1; } }\n", "F.java", "java")
     assert java and any("bar" in c.text for c in java)
+
+
+def test_js_assigned_function_names():
+    """CommonJS / arrow-assigned functions should still get symbol names."""
+    src = (b"const slugify = (s) => s.toLowerCase();\n"
+           b"module.exports = function createApp() { return 2; };\n"
+           b"exports.render = (v) => v;\n"
+           b"function plain() { return 4; }\n")
+    # max_chars=1 forces each top-level statement into its own chunk
+    chunks = chunk_source(src, "a.js", "javascript", max_chars=1)
+    names = {c.symbol for c in chunks if c.symbol}
+    assert {"slugify", "module.exports", "exports.render", "plain"} <= names

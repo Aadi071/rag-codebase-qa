@@ -35,6 +35,7 @@ from store import db
 import retrieve
 import answer as answer_mod
 import indexer
+import config
 import security
 import llm
 
@@ -115,6 +116,20 @@ def _page(name):
     with open(os.path.join(WEB_DIR, name), encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
+@app.get("/healthz")
+def healthz():
+    """Liveness + dependency check for the platform's health probe."""
+    try:
+        conn = db.connect()
+        conn.execute("SELECT 1")
+        conn.close()
+        db_ok = True
+    except Exception:
+        db_ok = False
+    return {"ok": db_ok, "embeddings": config.EMBEDDING_BACKEND,
+            "llm": config.LLM_BACKEND, "dim": config.EMBEDDING_DIM}
+
+
 @app.get("/", response_class=HTMLResponse)
 def landing(): return _page("landing.html")
 
@@ -159,8 +174,14 @@ def login(c: Creds):
 
 # ---- core API --------------------------------------------------------------
 @app.post("/api/index")
-def start_index(req: IndexReq, user=None):
-    # auth optional here so status polling stays simple, but require a token:
+def start_index(req: IndexReq, authorization: str = Header(None)):
+    current_user(authorization)
+    if not config.indexing_allowed(req.repo_url):
+        raise HTTPException(
+            status_code=403,
+            detail="Indexing is disabled on this deployment (or this repo is not "
+                   "allowlisted). Ask about an already-indexed repo.",
+        )
     return _do_index(req)
 
 def _do_index(req: IndexReq):

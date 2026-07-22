@@ -97,12 +97,49 @@ def _definition_node(node):
     return node
 
 
+# JS/TS functions bound to a name (rather than declared) carry no `name` field
+# on the statement, so we dig the identifier out of the assignment instead.
+_FUNC_VALUE_TYPES = ("arrow_function", "function_expression", "function",
+                     "class", "class_expression")
+
+
+def _assigned_function_name(node):
+    """Name for a function assigned to an identifier (JS/TS).
+
+    Covers `const foo = () => {}`, `var f = function(){}`,
+    `module.exports = function(){}` and `exports.render = v => v` -- the
+    CommonJS/ES styles that dominate real JavaScript codebases.
+    """
+    if node.type == "export_statement":                # `export const foo = ...`
+        for c in node.children:
+            found = _assigned_function_name(c)
+            if found is not None:
+                return found
+        return None
+    if node.type in ("lexical_declaration", "variable_declaration"):
+        for c in node.children:
+            if c.type == "variable_declarator":
+                value = c.child_by_field_name("value")
+                if value is not None and value.type in _FUNC_VALUE_TYPES:
+                    return c.child_by_field_name("name")
+        return None
+    if node.type == "expression_statement":            # `module.exports = fn`
+        for c in node.children:
+            if c.type == "assignment_expression":
+                value = c.child_by_field_name("right")
+                if value is not None and value.type in _FUNC_VALUE_TYPES:
+                    return c.child_by_field_name("left")
+    return None
+
+
 def _node_name(node, source):
     """Return the name a function/class/impl node defines, if available."""
     node = _definition_node(node)
     name_node = node.child_by_field_name("name")
     if name_node is None and node.type == "impl_item":
         name_node = node.child_by_field_name("type")   # Rust: `impl Foo`
+    if name_node is None:
+        name_node = _assigned_function_name(node)      # JS/TS assigned functions
     if name_node is not None:
         return source[name_node.start_byte:name_node.end_byte].decode("utf-8", "replace")
     return None

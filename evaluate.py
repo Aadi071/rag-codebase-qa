@@ -1,31 +1,32 @@
-"""Milestone 5: measure retrieval accuracy on a hand-labeled question set.
+"""Measure retrieval accuracy on a hand-labeled question set.
 
-For each question we know which file(s) contain the answer (eval/eval_set.json).
-We run three retrieval strategies and check whether a correct file appears in the
-top-k results:
-  - vector-only  (dense embeddings)
-  - bm25-only    (keyword)
-  - hybrid       (vector + bm25 fused with RRF)  <- what the app uses
+Compares retrieval strategies on questions where we know which file holds the
+answer (eval/eval_set.json). Questions are tagged by kind:
+  - conceptual  ("How does Click parse options?")  -> embeddings usually win
+  - identifier  ("Where is resolve_command defined?") -> BM25 usually wins
+Hybrid should win overall by covering BOTH. Reporting them separately is the
+only way to see whether hybrid is actually earning its keep.
 
-Metrics:
-  Recall@k = fraction of questions with a correct file in the top-k.
-  MRR      = mean of 1/(rank of first correct file).  (reported for hybrid)
+Metrics: Recall@k (a correct file in the top-k) and MRR (1/rank of first hit).
 
-The vector-only-vs-hybrid gap is the evidence that hybrid retrieval was worth it,
-and Recall@3 for hybrid is the "top-3 retrieval accuracy" number for your resume.
-
-Usage:  python evaluate.py            (uses eval/eval_set.json)
+Usage:
+    python evaluate.py                # current configured fusion weights
+    python evaluate.py --sweep        # try several BM25 weights in ONE pass
+    python evaluate.py --sweep --rerank
 """
 
+import argparse
 import json
 import os
 
-from store import db
-from embed import embeddings
+import config
 import retrieve
+from embed import embeddings
+from store import db
 
 KS = [1, 3, 5]
 CANDIDATES = 20
+SWEEP_BM25_WEIGHTS = [0.0, 0.25, 0.5, 0.75, 1.0]
 
 
 def _norm(p):
@@ -40,14 +41,15 @@ def _first_hit_rank(ranked_paths, expected):
 
 
 def main():
-    import argparse as _argparse
-    _ap = _argparse.ArgumentParser()
-    _ap.add_argument("--rerank", action="store_true", help="also score a hybrid+cross-encoder-rerank row")
-    _args = _ap.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--sweep", action="store_true",
+                    help="evaluate several BM25 fusion weights in one pass")
+    ap.add_argument("--rerank", action="store_true",
+                    help="also score a cross-encoder reranked row")
+    args = ap.parse_args()
 
     spec = json.load(open(os.path.join("eval", "eval_set.json"), encoding="utf-8"))
-    repo = spec["repo"]
-    questions = spec["questions"]
+    repo, questions = spec["repo"], spec["questions"]
 
     conn = db.connect()
     all_chunks = db.fetch_chunks(conn, repo=repo)
@@ -56,48 +58,80 @@ def main():
         return
     by_id = {c["id"]: c for c in all_chunks}
 
-    # accumulators: mode -> {k -> hits}, plus reciprocal ranks for hybrid
-    modes = ["vector", "bm25", "hybrid"] + (["hybrid+rr"] if _args.rerank else [])
+    weights = SWEEP_BM25_WEIGHTS if args.sweep else [config.RRF_WEIGHT_BM25]
+    modes = ["vector", "bm25"] + [f"hybrid(bm25={w})" for w in weights]
+    if args.rerank:
+        modes.append("hybrid+rerank")
+
+    kinds = sorted({q.get("kind", "conceptual") for q in questions})
     hits = {m: {k: 0 for k in KS} for m in modes}
-    rr_hybrid = 0.0
+    rr = {m: 0.0 for m in modes}
+    kind_hits = {m: {kd: [0, 0] for kd in kinds} for m in modes}   # [hit@3, total]
 
     for item in questions:
-        q, expected = item["q"], set(_norm(f) for f in item["files"])
+        q = item["q"]
+        expected = {_norm(f) for f in item["files"]}
+        kind = item.get("kind", "conceptual")
 
-        qv = embeddings.embed_query(q)
+        qv = embeddings.embed_query(q)                       # embed ONCE per question
         vec_ids = [r["id"] for r in db.vector_search(conn, qv, repo=repo, k=CANDIDATES)]
         bm_ids = retrieve.bm25_rank(q, all_chunks)[:CANDIDATES]
-        hyb_ids, _ = retrieve.rrf_fuse([vec_ids, bm_ids])
 
         ranked = {
             "vector": [by_id[i]["rel_path"] for i in vec_ids],
             "bm25": [by_id[i]["rel_path"] for i in bm_ids],
-            "hybrid": [by_id[i]["rel_path"] for i in hyb_ids],
         }
-        if _args.rerank:
-            cand = [dict(by_id[i]) for i in hyb_ids[:20]]
-            reranked = retrieve.rerank(q, cand)
-            ranked["hybrid+rr"] = [r["rel_path"] for r in reranked]
-        for mode, paths in ranked.items():
-            rank = _first_hit_rank(paths, expected)
+        for w in weights:
+            ids, _ = retrieve.rrf_fuse([vec_ids, bm_ids],
+                                       weights=[config.RRF_WEIGHT_VECTOR, w])
+            ranked[f"hybrid(bm25={w})"] = [by_id[i]["rel_path"] for i in ids]
+        if args.rerank:
+            base, _ = retrieve.rrf_fuse(
+                [vec_ids, bm_ids],
+                weights=[config.RRF_WEIGHT_VECTOR, config.RRF_WEIGHT_BM25])
+            cand = [dict(by_id[i]) for i in base[:CANDIDATES]]
+            ranked["hybrid+rerank"] = [r["rel_path"] for r in retrieve.rerank(q, cand)]
+
+        for mode in modes:
+            rank = _first_hit_rank(ranked[mode], expected)
             for k in KS:
                 if rank is not None and rank <= k:
                     hits[mode][k] += 1
-        hr = _first_hit_rank(ranked["hybrid"], expected)
-        rr_hybrid += (1.0 / hr) if hr else 0.0
+            rr[mode] += (1.0 / rank) if rank else 0.0
+            kind_hits[mode][kind][1] += 1
+            if rank is not None and rank <= 3:
+                kind_hits[mode][kind][0] += 1
 
     conn.close()
     n = len(questions)
 
-    print(f"\nRetrieval accuracy on {n} hand-labeled questions ({repo})\n")
-    header = "mode      " + "".join(f"  Recall@{k}" for k in KS)
+    counts = {kd: sum(1 for q in questions if q.get("kind", "conceptual") == kd)
+              for kd in kinds}
+    breakdown = ", ".join(f"{kd}: {c}" for kd, c in counts.items())
+    print(f"\nRetrieval accuracy on {n} hand-labeled questions ({repo})")
+    print(f"({breakdown})\n")
+    header = f"{'mode':<22}" + "".join(f"  R@{k}" .rjust(9) for k in KS) + "      MRR"
     print(header)
     print("-" * len(header))
-    for mode in modes:
-        row = f"{mode:<9}" + "".join(f"   {hits[mode][k]/n*100:5.1f}%" for k in KS)
+    for m in modes:
+        row = f"{m:<22}" + "".join(f"{hits[m][k]/n*100:8.1f}%" for k in KS)
+        row += f"   {rr[m]/n:.3f}"
         print(row)
-    print(f"\nHybrid MRR: {rr_hybrid/n:.3f}")
-    print(f"\n==> Headline: hybrid top-3 retrieval accuracy = {hits['hybrid'][3]/n*100:.1f}%")
+
+    print(f"\nRecall@3 by question type")
+    kh = f"{'mode':<22}" + "".join(f"{kd:>14}" for kd in kinds)
+    print(kh)
+    print("-" * len(kh))
+    for m in modes:
+        row = f"{m:<22}"
+        for kd in kinds:
+            hit, tot = kind_hits[m][kd]
+            row += f"{(hit/tot*100 if tot else 0):13.1f}%"
+        print(row)
+
+    best = max(modes, key=lambda m: (hits[m][3], rr[m]))
+    print(f"\n==> Best overall at Recall@3: {best} = {hits[best][3]/n*100:.1f}% "
+          f"(MRR {rr[best]/n:.3f})")
 
 
 if __name__ == "__main__":

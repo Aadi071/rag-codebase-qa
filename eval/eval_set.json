@@ -1,23 +1,205 @@
 {
   "repo": "https://github.com/pallets/click",
   "questions": [
-    {"q": "How does Click parse command-line options?", "files": ["src/click/parser.py", "src/click/core.py"]},
-    {"q": "How does Click prompt the user for input?", "files": ["src/click/termui.py"]},
-    {"q": "How is hidden password input masked?", "files": ["src/click/termui.py"]},
-    {"q": "How does Click style terminal text with colors?", "files": ["src/click/termui.py"]},
-    {"q": "How is the progress bar implemented?", "files": ["src/click/_termui_impl.py", "src/click/termui.py"]},
-    {"q": "How does Click page long output through a pager?", "files": ["src/click/_termui_impl.py", "src/click/termui.py"]},
-    {"q": "What does the Context object do and how is it used?", "files": ["src/click/core.py"]},
-    {"q": "How are command groups and subcommands handled?", "files": ["src/click/core.py"]},
-    {"q": "How does CliRunner test CLI commands?", "files": ["src/click/testing.py"]},
-    {"q": "How does the File parameter type open files?", "files": ["src/click/types.py"]},
-    {"q": "How are usage errors represented and raised?", "files": ["src/click/exceptions.py"]},
-    {"q": "How does the command decorator turn a function into a command?", "files": ["src/click/decorators.py"]},
-    {"q": "How is help text formatted and wrapped?", "files": ["src/click/formatting.py"]},
-    {"q": "How does shell completion work?", "files": ["src/click/shell_completion.py"]},
-    {"q": "How are command aliases resolved in the aliases example?", "files": ["examples/aliases/aliases.py"]},
-    {"q": "How does Click read option values from environment variables?", "files": ["src/click/core.py"]},
-    {"q": "How does Click handle Windows console unicode input and output?", "files": ["src/click/_winconsole.py", "src/click/_compat.py"]},
-    {"q": "How are positional arguments split and unpacked during parsing?", "files": ["src/click/parser.py"]}
+    {
+      "q": "How does Click parse command-line options?",
+      "files": [
+        "src/click/parser.py",
+        "src/click/core.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does Click prompt the user for input?",
+      "files": [
+        "src/click/termui.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How is hidden password input masked?",
+      "files": [
+        "src/click/termui.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does Click style terminal text with colors?",
+      "files": [
+        "src/click/termui.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How is the progress bar implemented?",
+      "files": [
+        "src/click/_termui_impl.py",
+        "src/click/termui.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does Click page long output through a pager?",
+      "files": [
+        "src/click/_termui_impl.py",
+        "src/click/termui.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "What does the Context object do and how is it used?",
+      "files": [
+        "src/click/core.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How are command groups and subcommands handled?",
+      "files": [
+        "src/click/core.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does CliRunner test CLI commands?",
+      "files": [
+        "src/click/testing.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does the File parameter type open files?",
+      "files": [
+        "src/click/types.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How are usage errors represented and raised?",
+      "files": [
+        "src/click/exceptions.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does the command decorator turn a function into a command?",
+      "files": [
+        "src/click/decorators.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How is help text formatted and wrapped?",
+      "files": [
+        "src/click/formatting.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does shell completion work?",
+      "files": [
+        "src/click/shell_completion.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How are command aliases resolved in the aliases example?",
+      "files": [
+        "examples/aliases/aliases.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does Click read option values from environment variables?",
+      "files": [
+        "src/click/core.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How does Click handle Windows console unicode input and output?",
+      "files": [
+        "src/click/_winconsole.py",
+        "src/click/_compat.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "How are positional arguments split and unpacked during parsing?",
+      "files": [
+        "src/click/parser.py"
+      ],
+      "kind": "conceptual"
+    },
+    {
+      "q": "Where is resolve_command defined?",
+      "files": [
+        "src/click/core.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is _mask_hidden_input implemented?",
+      "files": [
+        "src/click/termui.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is echo_via_pager defined?",
+      "files": [
+        "src/click/termui.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is the CliRunner class defined?",
+      "files": [
+        "src/click/testing.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is HelpFormatter defined?",
+      "files": [
+        "src/click/formatting.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is _OptionParser defined?",
+      "files": [
+        "src/click/parser.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is UsageError defined?",
+      "files": [
+        "src/click/exceptions.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is ProgressBar implemented?",
+      "files": [
+        "src/click/_termui_impl.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is get_current_context defined?",
+      "files": [
+        "src/click/globals.py"
+      ],
+      "kind": "identifier"
+    },
+    {
+      "q": "Where is make_context defined?",
+      "files": [
+        "src/click/core.py"
+      ],
+      "kind": "identifier"
+    }
   ]
 }

@@ -1,0 +1,11 @@
+.git
+.venv
+venv
+__pycache__
+**/__pycache__
+.pytest_cache
+.env
+*.pyc
+tests
+train
+eval/*.jsonl

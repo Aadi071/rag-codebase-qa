@@ -513,3 +513,103 @@ Test fixes: enlarged sample_repo (BM25 IDF is degenerate on a 2-doc corpus);
 go/java chunker test asserts parse+identifier (tiny files merge so symbol=None).
 
 README updated (RERANK config, pytest instructions, reworked 10x section).
+
+## Session 2026-07-18 — EVAL CLOSED: hybrid falsified, vector-only shipped
+
+Ran the real eval on Anty's machine (bge-base, click). THE HEADLINE NUMBER IS
+NOW REAL: **96.4% top-3 retrieval accuracy, MRR 0.852** (vector-only).
+
+Full result (28 questions: 18 conceptual + 10 identifier):
+  vector            R@1 75.0  R@3 96.4  R@5 100.0  MRR 0.852
+  bm25              R@1 42.9  R@3 75.0  R@5  82.1  MRR 0.604
+  hybrid(any w>0)   R@3 89.3 max  -> strictly worse than vector
+  By kind (R@3): vector conceptual 94.4 / identifier 100.0
+                 bm25   conceptual 83.3 / identifier  60.0
+
+HYPOTHESIS FALSIFIED. "Embeddings are weak on exact identifiers, BM25 catches
+them" is NOT true here. Investigated in two steps before accepting it:
+ 1. Added weighted RRF + weight sweep (0->1). Every non-zero BM25 weight lost.
+ 2. Found a REAL tokenizer bug: _WORD split on underscores before recording the
+    whole word, so `resolve_command` never existed as a token -> BM25's exact-
+    match edge on snake_case was destroyed. Fixed tokenize() to emit the full
+    identifier + parts. BM25 STILL didn't improve (identifier R@3 stayed 60%).
+ROOT CAUSE: BM25 finds OCCURRENCES, not DEFINITIONS (a test mentioning a symbol
+5x outranks the chunk defining it). The AST chunker already embeds symbol names +
+class signatures in every chunk, so the embedding matches the definition. M1's
+chunking made M3's BM25 redundant - two components solving the same problem.
+
+SHIPPED: config RRF_WEIGHT_BM25 default 0.0 (vector-only). hybrid_search now
+SKIPS the BM25 index build entirely when weight==0 (per-query speedup). Hybrid
+path retained behind config for weaker embedders / other codebases.
+Eval set grown 18 -> 28 (added 10 identifier questions, ground-truthed against
+click source). evaluate.py rewritten: embeds once per question, --sweep tries
+BM25 weights in one pass, per-kind Recall@3 breakdown, --rerank row.
+README: Evaluation section rewritten with real numbers + the falsified-hypothesis
+writeup; hardest-decision #2 reframed as "built it, measured it, turned it off".
+All 10 tests still pass.
+
+REMAINING: deployment (deferred), JS CommonJS symbol naming, demo video.
+
+## Session 2026-07-18 (cont.) — JS/TS assigned-function naming
+
+Closed the last open code item. chunker.py `_assigned_function_name()` now
+resolves names for functions BOUND to an identifier rather than declared:
+  const foo = () => {}        -> foo
+  var f = function(){}        -> f
+  module.exports = function(){} -> module.exports
+  exports.render = v => v     -> exports.render
+  export const fetchIt = ...  -> fetchIt   (recurses through export_statement)
+Handles lexical_declaration / variable_declaration (variable_declarator name+value)
+and expression_statement > assignment_expression (left+right), gated on the value
+being arrow_function / function_expression / class. Python unaffected (its node
+type is `assignment`, not `assignment_expression`).
+
+MEASURED: express 11 -> 18 named chunks; ky 24 -> 33. Python (click) unchanged at
+385 named, 0 broken / 0 orphan.
+
+HONEST LIMIT: JS stays ~8% named vs Python ~58%, and it's structural not a bug -
+much JS top-level code is require blocks / describe() wrappers / config objects
+that aren't definitions, plus small statements merge into multi-node chunks
+(symbol only set for single-node chunks). Documented in README.
+New pytest: test_js_assigned_function_names (uses max_chars=1 to force one chunk
+per statement). 11 tests pass.
+
+REMAINING: deployment (deferred by choice), demo video.
+
+## Session 2026-07-18 (cont.) — DEPLOYMENT: production build done (live URL needs Anty's accounts)
+
+Constraint: local build (bge/torch + Ollama) cannot run on free cloud tiers.
+Deployed build swaps to hosted APIs via env vars only - no code changes.
+
+New artifacts:
+- `Dockerfile` - python:3.11-slim, installs `git` (needed: indexing shallow-clones),
+  installs requirements-prod.txt, CMD binds 0.0.0.0:${PORT:-8000} (PaaS injects PORT).
+- `requirements-prod.txt` - EXCLUDES sentence-transformers/torch (prod uses hosted
+  embeddings). Verified: every BOOT-TIME third-party import is covered; `openai`
+  and `sentence_transformers` are lazily imported so neither is needed at boot.
+- `.dockerignore` - excludes .env/.git/.venv/tests/caches.
+- `docker-compose.prod.yml` - app + pgvector together ("runs anywhere" proof).
+- `DEPLOYMENT.md` - local-container run; managed Postgres (Neon/Supabase, NOT
+  Railway PG - pgvector); env var table; /healthz verification; **seed the index
+  from your machine against the prod DB** (avoids tying up a web dyno); cost
+  control; ops notes (ephemeral disk, cold starts, rollback, teardown).
+- `app.py`: GET /healthz (checks DB + reports backends/dim); /api/index now
+  REQUIRES auth and is gated by config.indexing_allowed().
+- `config.py`: ALLOW_INDEXING (default true) + INDEX_ALLOWLIST + indexing_allowed()
+  - a public /api/index clones+embeds arbitrary repos = unbounded cost.
+
+VERIFIED 10/10 in sandbox, which is already prod-shaped (NO torch, NO
+sentence-transformers installed): forced EMBEDDING_BACKEND=openai +
+LLM_BACKEND=openai and faked the OpenAI SDK so the REAL _embed_openai /
+_openai_chat code paths ran. Confirmed: config dim 1536, /healthz ok, index
+requires auth, indexed via hosted embeddings, stored vectors ARE 1536-dim, ask +
+feedback + analytics work, ALLOW_INDEXING=false -> 403, allowlist blocks/permits
+correctly. All 11 pytest tests still pass.
+
+NOT DONE (needs Anty - I cannot create accounts or enter payment details):
+create Neon/Supabase + Railway/Render accounts, add API credit, set env vars,
+seed the prod index, flip ALLOW_INDEXING=false. All steps are in DEPLOYMENT.md.
+Docker image itself is UNBUILT (no docker in sandbox) - first `docker compose
+-f docker-compose.prod.yml up --build` locally is the real smoke test.
+
+REMAINING: demo video; optional walkthrough of chunker/retrieval with Anty.

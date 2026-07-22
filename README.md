@@ -70,11 +70,14 @@ the size budget; an oversized *class* is split into its methods, and **each
 method chunk is prefixed with the class signature** and named `ClassName.method`
 so it never loses its parent context. This directly improves what the LLM sees.
 
-**2. Hybrid retrieval, because embeddings are weak on exact identifiers.** Dense
-embeddings capture meaning but miss exact symbols like `resolve_command`. BM25
-catches those. We run both and fuse with RRF, which combines by **rank** (not raw
-score), so cosine-similarity and BM25 scores don't need to be normalized against
-each other. The eval below quantifies the lift.
+**2. Hybrid retrieval — built it, measured it, then turned it off.** I added BM25
+alongside dense retrieval on the standard reasoning that embeddings miss exact
+identifiers. A 28-question labeled eval showed the opposite on this codebase:
+vector-only beat BM25 even on identifier lookups, because the AST chunks already
+carry symbol names and class signatures. I swept fusion weights and fixed a
+tokenizer bug before accepting the result. Ships vector-only by default, with
+hybrid retained behind config and the eval kept as the evidence. (Full writeup in
+Evaluation.)
 
 **3. pgvector over a dedicated vector DB.** One fewer moving part: the chunk text,
 its metadata, and its vector live in the same Postgres row and transaction. No
@@ -86,23 +89,58 @@ change. Default is zero-cost local (bge + Ollama).
 
 ## Evaluation
 
-`evaluate.py` scores retrieval on an 18-question hand-labeled set
-(`eval/eval_set.json`), comparing vector-only, BM25-only, and hybrid:
+`evaluate.py` scores retrieval on a 28-question hand-labeled set
+(`eval/eval_set.json`) — 18 conceptual ("How does Click parse options?") and 10
+identifier lookups ("Where is `resolve_command` defined?"), each mapped to the
+file that holds the answer. Measured on `pallets/click` with bge-base:
 
 ```
-mode        Recall@1  Recall@3  Recall@5
-----------------------------------------
-vector        [ ... fill in from `python evaluate.py` ... ]
-bm25
-hybrid
-Hybrid MRR: [ ... ]
+mode                        R@1      R@3      R@5      MRR
+----------------------------------------------------------
+vector                    75.0%    96.4%   100.0%   0.852
+bm25                      42.9%    75.0%    82.1%   0.604
+hybrid(bm25=0.25)         75.0%    89.3%    96.4%   0.832
+hybrid(bm25=0.5)          71.4%    89.3%    96.4%   0.821
+hybrid(bm25=1.0)          75.0%    89.3%    92.9%   0.829
+
+Recall@3 by question type   conceptual    identifier
+vector                           94.4%        100.0%
+bm25                             83.3%         60.0%
+hybrid(bm25>0)                   88.9%         90.0%
 ```
 
-Headline: **hybrid top-3 retrieval accuracy = [X]%.** The vector-vs-hybrid gap is
-the evidence that hybrid retrieval was worth building.
+**Headline: 96.4% top-3 retrieval accuracy, MRR 0.852.**
+
+### The result that surprised me
+
+I built hybrid retrieval on the standard premise: *embeddings are weak on exact
+identifiers, so BM25 is needed to catch them.* **The measurement falsified that
+here.** Vector-only beat BM25 even on identifier lookups (100% vs 60%), and
+fusing BM25 in at any weight made things strictly worse.
+
+I chased it down in two steps:
+
+1. **Suspected the fusion weighting.** Added weighted RRF and swept BM25 weights
+   0 → 1. Every non-zero weight underperformed. Not the cause.
+2. **Found a real bug in my tokenizer.** It split on underscores *before*
+   recording the whole word, so `resolve_command` never existed as a token —
+   destroying BM25's exact-match advantage on snake_case code. Fixed it to emit
+   the full identifier plus its parts. BM25 *still* didn't improve.
+
+The actual explanation: **BM25 finds occurrences, not definitions.** A test file
+mentioning `resolve_command` five times outranks the one chunk that defines it.
+Meanwhile the AST chunker already puts the symbol name and `class X:` signature
+into every chunk, so the embedding matches the definition directly. **The
+chunking work made BM25 redundant** — two components solving the same problem.
+
+So the shipped default is `RRF_WEIGHT_BM25=0.0` (vector-only), and `hybrid_search`
+skips the BM25 pass entirely at weight 0 to save the per-query index build. The
+hybrid path stays in the codebase behind config, because with a weaker embedder
+or a codebase with unusual identifiers the trade-off could flip — and now there's
+a harness to re-check that in one command.
 
 > `selftest.py` additionally verifies the full stack end-to-end (chunking,
-> pgvector + real embeddings, hybrid retrieval, grounded Ollama answer).
+> pgvector + real embeddings, retrieval, grounded Ollama answer).
 
 ## Learning from feedback
 
@@ -147,9 +185,32 @@ cache, and a feedback-driven few-shot loop.
 Still ahead at real scale:
 - A durable job queue (not an in-process thread) so many repos index concurrently.
 - Per-tenant isolation + rate limiting.
-- Better JS symbol extraction (CommonJS / assigned function expressions).
+- JS symbol coverage is structurally lower than Python's (~8% vs ~58% of chunks
+  named): CommonJS/arrow assignments now resolve, but much JS top-level code is
+  `require` blocks and `describe()` wrappers that aren't definitions at all.
 - True DPO preference pairs (two answers per prompt) for fine-tuning.
-- A live cloud deployment (needs hosted models -- bge + Ollama don't fit free tiers).
+- A live public URL: container, prod config and guide are done (DEPLOYMENT.md);
+  it only needs an account + a few dollars of API credit.
+
+## Deployment
+
+The local build is fully offline (bge-base + Ollama). The **deployed** build swaps
+both for hosted APIs via env vars -- no code changes, because the backends are
+pluggable. PyTorch and Ollama don't fit free cloud tiers, so the production image
+deliberately omits them (`requirements-prod.txt`).
+
+```bash
+# whole stack in containers, locally:
+export OPENAI_API_KEY=sk-...
+docker compose -f docker-compose.prod.yml up --build   # -> http://localhost:8000
+```
+
+Public deploy (managed Postgres w/ pgvector + a container host), env vars, index
+seeding and cost controls are documented step-by-step in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+
+> Gotcha: the two embedding backends produce different vector sizes (768 vs
+> 1536), so a database indexed with one cannot be queried with the other. The
+> deployed DB is a separate index built with hosted embeddings.
 
 ## Run it locally
 
