@@ -21,13 +21,22 @@ _BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 # ---- OpenAI backend -------------------------------------------------------
-def _embed_openai(texts, batch_size=100):
+def _embed_openai(texts, batch_size=None):
+    # Works with real OpenAI or any OpenAI-compatible embeddings API (e.g.
+    # Gemini's compat endpoint) via config.EMBEDDING_BASE_URL / EMBEDDING_API_KEY.
     from openai import OpenAI
     global _openai_client
     if _openai_client is None:
-        if not config.OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is not set (add it to your .env).")
-        _openai_client = OpenAI(api_key=config.OPENAI_API_KEY)
+        if not config.EMBEDDING_API_KEY:
+            raise RuntimeError(
+                "EMBEDDING_API_KEY / OPENAI_API_KEY is not set (add it to your .env).")
+        _openai_client = OpenAI(api_key=config.EMBEDDING_API_KEY,
+                                base_url=config.EMBEDDING_BASE_URL)
+
+    batch_size = batch_size or config.EMBEDDING_BATCH_SIZE
+    extra = {}
+    if config.EMBEDDING_DIMENSIONS:            # request a specific output size
+        extra["dimensions"] = config.EMBEDDING_DIMENSIONS
 
     vectors = []
     for i in range(0, len(texts), batch_size):
@@ -35,7 +44,7 @@ def _embed_openai(texts, batch_size=100):
         for attempt in range(3):
             try:
                 resp = _openai_client.embeddings.create(
-                    model=config.EMBEDDING_MODEL, input=batch)
+                    model=config.EMBEDDING_MODEL, input=batch, **extra)
                 break
             except Exception:
                 if attempt == 2:

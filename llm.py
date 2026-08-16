@@ -47,10 +47,12 @@ def _anthropic_chat(system, user):
 
 
 def _openai_chat(system, user):
+    # Works with real OpenAI or any OpenAI-compatible API (Gemini, Groq, ...)
+    # via config.OPENAI_BASE_URL. base_url=None falls back to real OpenAI.
     from openai import OpenAI
-    client = OpenAI(api_key=config.OPENAI_API_KEY)
+    client = OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL)
     resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+        model=config.OPENAI_CHAT_MODEL,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
     )

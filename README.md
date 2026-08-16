@@ -190,7 +190,7 @@ Still ahead at real scale:
   `require` blocks and `describe()` wrappers that aren't definitions at all.
 - True DPO preference pairs (two answers per prompt) for fine-tuning.
 - A live public URL: container, prod config and guide are done (DEPLOYMENT.md);
-  it only needs an account + a few dollars of API credit.
+  it only needs free-tier accounts (Neon + a Gemini API key — $0).
 
 ## Deployment
 
@@ -199,18 +199,29 @@ both for hosted APIs via env vars -- no code changes, because the backends are
 pluggable. PyTorch and Ollama don't fit free cloud tiers, so the production image
 deliberately omits them (`requirements-prod.txt`).
 
+The `openai` backend talks to any **OpenAI-compatible** API, so the whole thing
+deploys for **$0** on Google Gemini's free tier — one API key serves both the
+chat LLM and the embeddings:
+
 ```bash
-# whole stack in containers, locally:
-export OPENAI_API_KEY=sk-...
+# whole stack in containers, locally, on the free Gemini tier:
+export OPENAI_API_KEY=AIza...        # a Gemini key from aistudio.google.com/apikey
+export OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/
+export EMBEDDING_BACKEND=openai LLM_BACKEND=openai
+export EMBEDDING_MODEL=gemini-embedding-001 EMBEDDING_DIM=768 EMBEDDING_DIMENSIONS=768
+export OPENAI_CHAT_MODEL=gemini-2.0-flash
 docker compose -f docker-compose.prod.yml up --build   # -> http://localhost:8000
 ```
 
-Public deploy (managed Postgres w/ pgvector + a container host), env vars, index
-seeding and cost controls are documented step-by-step in **[DEPLOYMENT.md](DEPLOYMENT.md)**.
+Public deploy (Neon/Supabase pgvector + a container host), the full env-var table,
+index seeding and cost controls are documented step-by-step in
+**[DEPLOYMENT.md](DEPLOYMENT.md)**. Real OpenAI / Anthropic remain drop-in paid
+alternatives (leave `OPENAI_BASE_URL` unset).
 
-> Gotcha: the two embedding backends produce different vector sizes (768 vs
-> 1536), so a database indexed with one cannot be queried with the other. The
-> deployed DB is a separate index built with hosted embeddings.
+> Gotcha: different embedders produce different, non-interchangeable vectors (and
+> sometimes different sizes — bge/Gemini 768d vs OpenAI 1536d), so a DB indexed
+> with one cannot be queried with another. The deployed DB is a separate index
+> built with whichever hosted embedder you deploy.
 
 ## Run it locally
 
@@ -255,9 +266,14 @@ pytest
 
 | Var | Default | Notes |
 |-----|---------|-------|
-| `EMBEDDING_BACKEND` | `local` | `local` (bge-base, 768d) or `openai` (1536d) |
+| `EMBEDDING_BACKEND` | `local` | `local` (bge-base, 768d) or `openai` (any OpenAI-compatible API) |
 | `LLM_BACKEND` | `ollama` | `ollama`, `anthropic`, or `openai` |
 | `OLLAMA_MODEL` | `llama3.1` | e.g. `llama3.2` for faster CPU inference |
+| `OPENAI_BASE_URL` | _(unset)_ | point the `openai` backend at Gemini/Groq/etc.; unset = real OpenAI |
+| `OPENAI_CHAT_MODEL` | `gpt-4o-mini` | chat model for the `openai` backend (e.g. `gemini-2.0-flash`) |
+| `EMBEDDING_MODEL` | backend default | `text-embedding-3-small` (OpenAI) / `gemini-embedding-001` (Gemini) |
+| `EMBEDDING_DIM` | `768`/`1536` | stored vector size; must match the embedder's output |
+| `EMBEDDING_DIMENSIONS` | _(unset)_ | request a specific output size (e.g. `768` for Gemini) |
 | `DATABASE_URL` | `postgresql://rag:rag@localhost:5432/rag` | matches docker-compose |
 | `RERANK` | `false` | set `true` to add a cross-encoder re-ranker (sharper, slower) |
 
